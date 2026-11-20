@@ -1,5 +1,15 @@
 # 当前工作日志
 
+## 2026-11-20 虚拟摄像机队列形式验证（Claude）
+
+新增 TLA+ 模型与项目 skill：`tools/formal/virtualcam/`（`VirtualCameraQueue.tla` 安全性、`VirtualCameraRecovery.tla` 恢复性、`check.py`）与 `.claude/skills/verify-virtualcam-queue/SKILL.md`（覆盖表、同步提交 b0ba6e86、读结果方法）。工具为 tla2tools 1.7.4（SHA-256 固定于 `check.py`），需 Java 11+；jar 与输出在 Windows 放 `E:/项目/Veyra/{deps,tmp}`，不进源码。
+
+结果（macOS，Java 21，10 核，基于 b0ba6e86）：同一串流内不倒退、一个会话的队列只含该会话画面、生产者只写入按其尺寸创建的映射，均在 2 个消费者、2 个回读槽、2 帧环、3 帧、2 次变化的边界内成立（9,609,407 个状态，约 30 秒）；换会话后，持续运行的消费者都能恢复新画面，另一个消费者停在 Paused 时也成立。六个镜像真实代码错误的变异全部被检出；在 9c0c5352 上把 `VirtualCamera.cpp:218` 临时改为先发布最新槽后，按 skill 同步模型即报 `NoStepBack`，已还原。
+
+F1：在 9c0c5352 上模型发现，已打开队列后进入 Paused 的消费者一直持有旧映射，Veyra 换源/改帧率/停启/改尺寸后 `video_queue_create` 持续失败，其他消费者停在占位图。#188（68d17363）同时修复：暂停循环每 100 ms 释放已 STOPPING 的队列；模型加入该动作后成立，变异 m6 去掉它即重新失败。
+
+修正记录：首个反例来自消费者 Stop→Run 后从最旧保留帧重来（模型无时钟），规则改为“同一串流内”，跨重启未验证。TLC 1.7.4 在完整无违规搜索后常在 `AbstractChecker.reportSuccess` 的指纹碰撞估计抛 `Division by zero`（JVM 异常日志确认），脚本仅在日志显示抛出点为 `reportSuccess` 时计为通过；换 `OffHeapDiskFPSet` 可避开但状态数每次不同，未采用。未验证：Windows 上运行 `check.py`、`/statechart` 读图流程。产品代码未修改。
+
 ## 2026-11-18 #152 60→30 在游戏不足30帧时送入重复画面（Claude，分支 claude/issue152-halfrate-20261118，未合 main）
 
 用户反馈PS5（2K60 NV12，VFG 2X中）掉帧时60→30剔除后31–32、补帧后61–63且卡顿。原因：`CaptureHalfRate`固定每两帧取一帧，游戏低于30帧时同一画面出现3次以上，网格会把同一画面保留两次（VFG在两张相同图之间插帧=顿挫）；同时2026-10-27的相位修正被反复触发，额外收入相邻帧导致超过30。修改：到期样本若与上次保留的画面编号相同，且距该保留不足`kHitchSlots`=5个采集周期（与ContentDedup 30帧节拍的卡顿窗口一致），则跳过并等下一张新画面，网格从新画面重新起算；超过窗口按静止画面在网格上保持（原行为）。保留原始PTS，帧间50ms按实际跨度插帧，不补帧凑30。无画面编号时（压缩采集等）行为不变。日志`capture-rate`增加repeatsSkipped/repeatsHeld。设置说明及四种译文同步。
